@@ -38,6 +38,7 @@ Collision :: struct {
 
 resources := ResourceManager{}
 renderer := SpriteRenderer{}
+particles := ParticleGenerator{}
 
 shake_time: f32 = 0.0
 
@@ -49,6 +50,18 @@ game_init :: proc(game: ^Game) {
 		"./resources/shaders/sprite.frag",
 		"sprite",
 	)
+	rm_load_shader(
+		&resources,
+		"./resources/shaders/particle.vert",
+		"./resources/shaders/particle.frag",
+		"particle",
+	)
+	rm_load_shader(
+		&resources,
+		"./resources/shaders/post_processing.vert",
+		"./resources/shaders/post_processing.frag",
+		"post_processing",
+	)
 
 	// configure shaders
 	projection := glm.mat4Ortho3d(0.0, cast(f32)game.width, cast(f32)game.height, 0.0, -1.0, 1.0)
@@ -58,7 +71,10 @@ game_init :: proc(game: ^Game) {
 	shader_set_int(sprite_shader, "image", 0)
 	shader_set_mat4(sprite_shader, "projection", &projection)
 
-	sprite_renderer_create(&renderer, rm_get_shader(&resources, "sprite"))
+	particle_shader := rm_get_shader(&resources, "particle")
+	shader_use(particle_shader)
+	shader_set_int(particle_shader, "u_sprite", 0)
+	shader_set_mat4(particle_shader, "u_projection", &projection)
 
 	// load textures
 	rm_load_texture(
@@ -76,6 +92,48 @@ game_init :: proc(game: ^Game) {
 		"block_solid",
 	)
 	rm_load_texture(&resources, "./resources/textures/paddle.png", gl.GL_Enum.RGBA, "paddle")
+	rm_load_texture(&resources, "./resources/textures/particle.png", gl.GL_Enum.RGBA, "particle")
+	rm_load_texture(
+		&resources,
+		"./resources/textures/powerup_speed.png",
+		gl.GL_Enum.RGBA,
+		"powerup_speed",
+	)
+	rm_load_texture(
+		&resources,
+		"./resources/textures/powerup_sticky.png",
+		gl.GL_Enum.RGBA,
+		"powerup_sticky",
+	)
+	rm_load_texture(
+		&resources,
+		"./resources/textures/powerup_increase.png",
+		gl.GL_Enum.RGBA,
+		"powerup_increase",
+	)
+	rm_load_texture(
+		&resources,
+		"./resources/textures/powerup_confuse.png",
+		gl.GL_Enum.RGBA,
+		"powerup_confuse",
+	)
+	rm_load_texture(
+		&resources,
+		"./resources/textures/powerup_chaos.png",
+		gl.GL_Enum.RGBA,
+		"powerup_chaos",
+	)
+	rm_load_texture(
+		&resources,
+		"./resources/textures/powerup_passthrough.png",
+		gl.GL_Enum.RGBA,
+		"powerup_passthrough",
+	)
+
+	sprite_renderer_create(&renderer, sprite_shader)
+
+	particle_tex, _ := rm_get_texture(&resources, "particle")
+	particle_generator_create(&particles, particle_shader, particle_tex, 500)
 
 	// load levels
 	one := GameLevel{}
@@ -161,9 +219,13 @@ game_update :: proc(game: ^Game, dt: f32) {
 	game_do_collisions(game)
 
 	// update particles
-	// particle_generator_update(game->particle_generator, dt,
-	//                           &game->ball.game_object, 2,
-	//                           glm::vec2(game->ball.radius / 2.0f));
+	particle_generator_update(
+		&particles,
+		dt,
+		&game.ball.game_object,
+		2,
+		glm.vec2(game.ball.radius / 2.0),
+	)
 
 	// game_update_powerups(game, dt);
 
@@ -201,6 +263,10 @@ game_draw :: proc(game: ^Game) {
 
 		// player
 		game_object_draw(&renderer, &game.player)
+
+		// particles (particles are on top of all the other objects but
+		// below the ball)
+		particle_generator_draw(&particles)
 
 		// ball
 		game_object_draw(&renderer, &game.ball.game_object)
