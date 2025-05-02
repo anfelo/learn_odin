@@ -7,13 +7,13 @@ import "vendor:glfw"
 screen_width: u32 : 800
 screen_height: u32 : 600
 game := Game {
-	GameState.GameActive,
-	[1024]bool{},
-	screen_width,
-	screen_height,
-	[dynamic]GameLevel{},
-	0,
-	GameObject{},
+	state  = GameState.GameActive,
+	keys   = [1024]bool{},
+	width  = screen_width,
+	height = screen_height,
+	levels = [dynamic]GameLevel{},
+	level  = 0,
+	player = GameObject{},
 }
 
 main :: proc() {
@@ -75,7 +75,7 @@ main :: proc() {
 		game_process_input(&game, cast(f32)delta_time)
 
 		// update game state
-		game_update(&game)
+		game_update(&game, cast(f32)delta_time)
 
 		// render game
 		gl.ClearColor(0.2, 0.3, 0.3, 1.0)

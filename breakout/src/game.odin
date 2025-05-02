@@ -18,6 +18,7 @@ Game :: struct {
 	levels:        [dynamic]GameLevel,
 	level:         u32,
 	player:        GameObject,
+	ball:          Ball,
 }
 
 resources := ResourceManager{}
@@ -100,6 +101,15 @@ game_init :: proc(game: ^Game) {
 		)
 	}
 	game.player = player
+
+	// Init ball object
+	ball := Ball{}
+	ball_pos := player_pos + glm.vec2{player.size.x / 2.0 - BALL_RADIUS, -BALL_RADIUS * 2.0}
+	ball_velocity := INITIAL_BALL_VELOCITY
+	if ball_tex, ok := rm_get_texture(&resources, "face"); ok {
+		ball_create(&ball, ball_pos, BALL_RADIUS, ball_tex, glm.vec3(1.0), ball_velocity)
+	}
+	game.ball = ball
 }
 
 game_process_input :: proc(game: ^Game, dt: f32) {
@@ -109,26 +119,50 @@ game_process_input :: proc(game: ^Game, dt: f32) {
 		if (game.keys[glfw.KEY_A] || game.keys[glfw.KEY_LEFT]) {
 			if (game.player.position.x >= 0.0) {
 				game.player.position.x -= velocity
-				// if (game.ball.stuck) {
-				// 	game.ball.game_object.position.x -= velocity
-				// }
+				if (game.ball.stuck) {
+					game.ball.game_object.position.x -= velocity
+				}
 			}
 		}
 		if (game.keys[glfw.KEY_D] || game.keys[glfw.KEY_RIGHT]) {
 			if (cast(u32)game.player.position.x <= game.width - cast(u32)game.player.size.x) {
 				game.player.position.x += velocity
-				// if (game.ball.stuck) {
-				// 	game.ball.game_object.position.x += velocity
-				// }
+				if (game.ball.stuck) {
+					game.ball.game_object.position.x += velocity
+				}
 			}
 		}
 		if (game.keys[glfw.KEY_SPACE]) {
-			// game.ball.stuck = false
+			game.ball.stuck = false
 		}
 	}
 }
 
-game_update :: proc(game: ^Game) {
+game_update :: proc(game: ^Game, dt: f32) {
+	ball_update(&game.ball, dt, game.width)
+
+	// game_do_collisions(game);
+
+	// update particles
+	// particle_generator_update(game->particle_generator, dt,
+	//                           &game->ball.game_object, 2,
+	//                           glm::vec2(game->ball.radius / 2.0f));
+
+	// game_update_powerups(game, dt);
+
+	// reduce shake time
+	// if (shake_time > 0.0f) {
+	//     shake_time -= dt;
+	//     if (shake_time <= 0.0f) {
+	//         game->effects->shake = false;
+	//     }
+	// }
+
+	// check loss condition
+	if (cast(u32)game.ball.game_object.position.y >= game.height) {
+		game_reset_level(game)
+		game_reset_player(game)
+	}
 }
 
 game_draw :: proc(game: ^Game) {
@@ -150,9 +184,63 @@ game_draw :: proc(game: ^Game) {
 
 		// player
 		game_object_draw(&renderer, &game.player)
+
+		// ball
+		game_object_draw(&renderer, &game.ball.game_object)
 	}
 }
 
 game_delete :: proc(game: ^Game) {
 	rm_clear_resources(&resources)
+}
+
+game_reset_level :: proc(game: ^Game) {
+	if (game.level == 0) {
+		game_level_load(
+			&resources,
+			&game.levels[0],
+			"./resources/levels/one.lvl",
+			game.width,
+			game.height / 2,
+		)
+	} else if (game.level == 1) {
+		game_level_load(
+			&resources,
+			&game.levels[1],
+			"./resources/levels/two.lvl",
+			game.width,
+			game.height / 2,
+		)
+	} else if (game.level == 2) {
+		game_level_load(
+			&resources,
+			&game.levels[2],
+			"./resources/levels/three.lvl",
+			game.width,
+			game.height / 2,
+		)
+	} else if (game.level == 3) {
+		game_level_load(
+			&resources,
+			&game.levels[3],
+			"./resources/levels/four.lvl",
+			game.width,
+			game.height / 2,
+		)
+	}
+}
+
+game_reset_player :: proc(game: ^Game) {
+	// reset player/ball stats
+	game.player.size = glm.vec2{100.0, 20.0}
+	game.player.position = glm.vec2 {
+		cast(f32)game.width / 2.0 - game.player.size.x / 2.0,
+		cast(f32)game.height - game.player.size.y,
+	}
+	game.player.color = glm.vec3(1.0)
+
+	ball_pos :=
+		game.player.position +
+		glm.vec2{game.player.size.x / 2.0 - BALL_RADIUS, -(BALL_RADIUS * 2.0)}
+	ball_reset(&game.ball, ball_pos, INITIAL_BALL_VELOCITY)
 }
