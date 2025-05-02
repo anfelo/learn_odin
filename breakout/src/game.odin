@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:math"
 import glm "core:math/linalg/glsl"
 import gl "vendor:OpenGL"
 import "vendor:glfw"
@@ -21,8 +22,24 @@ Game :: struct {
 	ball:          Ball,
 }
 
+// Represents the four possible (collision) directions
+Direction :: enum {
+	Up,
+	Right,
+	Down,
+	Left,
+}
+// Defines a Collision struct that represents collision data
+Collision :: struct {
+	collided:  bool,
+	direction: Direction,
+	diff_vec:  glm.vec2, // difference vector center - closest point
+}
+
 resources := ResourceManager{}
 renderer := SpriteRenderer{}
+
+shake_time: f32 = 0.0
 
 game_init :: proc(game: ^Game) {
 	// load shaders
@@ -141,7 +158,7 @@ game_process_input :: proc(game: ^Game, dt: f32) {
 game_update :: proc(game: ^Game, dt: f32) {
 	ball_update(&game.ball, dt, game.width)
 
-	// game_do_collisions(game);
+	game_do_collisions(game)
 
 	// update particles
 	// particle_generator_update(game->particle_generator, dt,
@@ -243,4 +260,162 @@ game_reset_player :: proc(game: ^Game) {
 		game.player.position +
 		glm.vec2{game.player.size.x / 2.0 - BALL_RADIUS, -(BALL_RADIUS * 2.0)}
 	ball_reset(&game.ball, ball_pos, INITIAL_BALL_VELOCITY)
+}
+
+// collisions
+
+game_do_collisions :: proc(game: ^Game) {
+	for &box in game.levels[game.level].bricks {
+		if (!box.destroyed) {
+			collision := check_collision_AABB_circle(game.ball, box)
+			if (collision.collided) {
+				// destroy block if not solid
+				if (!box.is_solid) {
+					box.destroyed = true
+					// TODO: implement
+					// game_spawn_powerups(game, &box)
+				} else {
+					// TODO: implement
+					// shake_time = 0.05
+					// game.effects.shake = true
+				}
+				// collision resolution
+				dir := collision.direction
+				diff_vector := collision.diff_vec
+				// don't do collision resolution on non-solid bricks if
+				// pass-through is activated
+				if (!(game.ball.pass_through && !box.is_solid)) {
+					// horizontal collision
+					if (dir == Direction.Left || dir == Direction.Right) {
+						// reverse horizontal velocity
+						game.ball.game_object.velocity.x = -game.ball.game_object.velocity.x
+						// relocate
+						penetration := game.ball.radius - math.abs(diff_vector.x)
+						if (dir == Direction.Left) {
+							// move ball to right
+							game.ball.game_object.position.x += penetration
+						} else {
+							// move ball to left;
+							game.ball.game_object.position.x -= penetration
+						}
+					} else {
+						// vertical collision
+						// reverse vertical velocity
+						game.ball.game_object.velocity.y = -game.ball.game_object.velocity.y
+						// relocate
+						penetration := game.ball.radius - math.abs(diff_vector.y)
+						if (dir == Direction.Up) {
+							// move ball back up
+							game.ball.game_object.position.y -= penetration
+						} else {
+							// move ball back down
+							game.ball.game_object.position.y += penetration
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// TODO: implement
+	// for (powerup_t &powerup : game->powerups) {
+	//     if (!powerup.game_object.destroyed) {
+	//         if (powerup.game_object.position.y >= game->height) {
+	//             powerup.game_object.destroyed = true;
+	//         }
+	//
+	//         // collided with player, now activate powerup
+	//         if (check_collision_AABB_AABB(game->player, powerup.game_object)) {
+	//             game_activate_powerup(game, &powerup);
+	//             powerup.game_object.destroyed = true;
+	//             powerup.activated = true;
+	//         }
+	//     }
+	// }
+
+	// check collisions for player pad (unless stuck)
+	result := check_collision_AABB_circle(game.ball, game.player)
+	if (!game.ball.stuck && result.collided) {
+		// check where it hit the board, and change velocity based on where it
+		// hit the board
+		center_board := game.player.position.x + game.player.size.x / 2.0
+		distance := (game.ball.game_object.position.x + game.ball.radius) - center_board
+		percentage := distance / (game.player.size.x / 2.0)
+		// then move accordingly
+		strength: f32 = 2.0
+		old_velocity := game.ball.game_object.velocity
+		game.ball.game_object.velocity.x = INITIAL_BALL_VELOCITY.x * percentage * strength
+		game.ball.game_object.velocity =
+			glm.normalize(game.ball.game_object.velocity) * glm.length(old_velocity) // keep speed consistent over both axes// (multiply by length of old velocity, so// total strength is not changed)
+		// fix sticky paddle
+		game.ball.game_object.velocity.y = -1.0 * math.abs(game.ball.game_object.velocity.y)
+
+		// if Sticky powerup is activated, also stick ball to paddle once new
+		// velocity vectors were calculated
+		game.ball.stuck = game.ball.sticky
+	}
+}
+
+// AABB - AABB collision
+check_collision_AABB_AABB :: proc(one: GameObject, two: GameObject) -> bool {
+	// collision x-axis?
+	collision_x :=
+		one.position.x + one.size.x >= two.position.x &&
+		two.position.x + two.size.x >= one.position.x
+	// collision y-axis?
+	collision_y :=
+		one.position.y + one.size.y >= two.position.y &&
+		two.position.y + two.size.y >= one.position.y
+	// collision only if on both axes
+	return collision_x && collision_y
+}
+
+// AABB - Circle collision
+check_collision_AABB_circle :: proc(one: Ball, two: GameObject) -> Collision {
+	// get center point circle first
+	center := glm.vec2(one.game_object.position + one.radius)
+	// calculate AABB info (center, half-extents)
+	aabb_half_extents := glm.vec2{two.size.x / 2.0, two.size.y / 2.0}
+	aabb_center := glm.vec2 {
+		two.position.x + aabb_half_extents.x,
+		two.position.y + aabb_half_extents.y,
+	}
+	// get difference vector between both centers
+	difference := center - aabb_center
+	clamped := glm.clamp(difference, -aabb_half_extents, aabb_half_extents)
+	// add clamped value to AABB_center and we get the value of box closest to
+	// circle
+	closest := aabb_center + clamped
+	// retrieve vector between center circle and closest point AABB and check if
+	// length <= radius
+	difference = closest - center
+
+	// not <= since in that case a collision also occurs when
+	// object one exactly touches object two, which they are at
+	// the end of each collision resolution stage.
+	if (glm.length(difference) < one.radius) {
+		return Collision{true, vector_direction(difference), difference}
+	} else {
+		return Collision{false, Direction.Up, glm.vec2(0.0)}
+	}
+}
+
+// calculates which direction a vector is facing (N,E,S or W)
+vector_direction :: proc(target: glm.vec2) -> Direction {
+	compass := [?]glm.vec2 {
+		glm.vec2{0.0, 1.0}, // up
+		glm.vec2{1.0, 0.0}, // right
+		glm.vec2{0.0, -1.0}, // down
+		glm.vec2{-1.0, 0.0}, // left
+	}
+	max: f32 = 0.0
+	best_match: i32 = -1
+	for i := 0; i < 4; i += 1 {
+		dot_product := glm.dot(glm.normalize(target), compass[i])
+		if (dot_product > max) {
+			max = dot_product
+			best_match = auto_cast i
+		}
+	}
+	return auto_cast best_match
 }
