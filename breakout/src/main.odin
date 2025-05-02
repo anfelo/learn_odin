@@ -6,7 +6,15 @@ import "vendor:glfw"
 
 screen_width: u32 : 800
 screen_height: u32 : 600
-game := Game{GameState.GameActive, [1024]bool{}, screen_width, screen_height}
+game := Game {
+	GameState.GameActive,
+	[1024]bool{},
+	screen_width,
+	screen_height,
+	[dynamic]GameLevel{},
+	0,
+	GameObject{},
+}
 
 main :: proc() {
 	// Initialize GLFW
@@ -48,22 +56,30 @@ main :: proc() {
 	gl.Enable(gl.BLEND)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
+	delta_time := 0.0
+	last_frame := 0.0
+
 	game_init(&game)
 	defer game_delete(&game)
 
 	// Main render loop
 	for !glfw.WindowShouldClose(window) {
-		// Process input
+		// per-frame time logic
+		// --------------------
+		current_frame := glfw.GetTime()
+		delta_time = current_frame - last_frame
+		last_frame = current_frame
 		glfw.PollEvents()
 
-		game_process_input(&game)
+		// manage user input
+		game_process_input(&game, cast(f32)delta_time)
 
+		// update game state
 		game_update(&game)
 
-		// Clear the screen
+		// render game
 		gl.ClearColor(0.2, 0.3, 0.3, 1.0)
 		gl.Clear(gl.COLOR_BUFFER_BIT)
-
 		game_draw(&game)
 
 		// Swap buffers and poll events
