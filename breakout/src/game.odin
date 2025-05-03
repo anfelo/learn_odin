@@ -3,6 +3,7 @@ package main
 import "core:fmt"
 import "core:math"
 import glm "core:math/linalg/glsl"
+import "core:math/rand"
 import gl "vendor:OpenGL"
 import "vendor:glfw"
 
@@ -20,6 +21,7 @@ Game :: struct {
 	level:         u32,
 	player:        GameObject,
 	ball:          Ball,
+	power_ups:     [dynamic]PowerUp,
 }
 
 // Represents the four possible (collision) directions
@@ -39,6 +41,7 @@ Collision :: struct {
 resources := ResourceManager{}
 renderer := SpriteRenderer{}
 particles := ParticleGenerator{}
+effects := PostProcessor{}
 
 shake_time: f32 = 0.0
 
@@ -66,12 +69,12 @@ game_init :: proc(game: ^Game) {
 	// configure shaders
 	projection := glm.mat4Ortho3d(0.0, cast(f32)game.width, cast(f32)game.height, 0.0, -1.0, 1.0)
 
-	sprite_shader := rm_get_shader(&resources, "sprite")
+	sprite_shader, _ := rm_get_shader(&resources, "sprite")
 	shader_use(sprite_shader)
 	shader_set_int(sprite_shader, "image", 0)
 	shader_set_mat4(sprite_shader, "projection", &projection)
 
-	particle_shader := rm_get_shader(&resources, "particle")
+	particle_shader, _ := rm_get_shader(&resources, "particle")
 	shader_use(particle_shader)
 	shader_set_int(particle_shader, "u_sprite", 0)
 	shader_set_mat4(particle_shader, "u_projection", &projection)
@@ -134,6 +137,9 @@ game_init :: proc(game: ^Game) {
 
 	particle_tex, _ := rm_get_texture(&resources, "particle")
 	particle_generator_create(&particles, particle_shader, particle_tex, 500)
+
+	post_processing_shader, _ := rm_get_shader(&resources, "post_processing")
+	post_processor_create(&effects, post_processing_shader, game.width, game.height)
 
 	// load levels
 	one := GameLevel{}
@@ -227,15 +233,15 @@ game_update :: proc(game: ^Game, dt: f32) {
 		glm.vec2(game.ball.radius / 2.0),
 	)
 
-	// game_update_powerups(game, dt);
+	game_update_powerups(game, dt)
 
 	// reduce shake time
-	// if (shake_time > 0.0f) {
-	//     shake_time -= dt;
-	//     if (shake_time <= 0.0f) {
-	//         game->effects->shake = false;
-	//     }
-	// }
+	if (shake_time > 0.0) {
+		shake_time -= dt
+		if (shake_time <= 0.0) {
+			effects.shake = false
+		}
+	}
 
 	// check loss condition
 	if (cast(u32)game.ball.game_object.position.y >= game.height) {
@@ -246,6 +252,9 @@ game_update :: proc(game: ^Game, dt: f32) {
 
 game_draw :: proc(game: ^Game) {
 	if (game.state == GameState.GameActive) {
+		// begin rendering to postprocessing framebuffer
+		post_processor_begin_render(&effects)
+
 		// draw background
 		if bg_texture, ok := rm_get_texture(&resources, "background"); ok {
 			sprite_renderer_draw_sprite(
@@ -264,12 +273,24 @@ game_draw :: proc(game: ^Game) {
 		// player
 		game_object_draw(&renderer, &game.player)
 
+		// draw powerups
+		for &powerup in game.power_ups {
+			if (!powerup.game_object.destroyed) {
+				game_object_draw(&renderer, &powerup.game_object)
+			}
+		}
+
 		// particles (particles are on top of all the other objects but
 		// below the ball)
 		particle_generator_draw(&particles)
 
 		// ball
 		game_object_draw(&renderer, &game.ball.game_object)
+
+		// end rendering to postprocessing framebuffer
+		post_processor_end_render(&effects)
+		// render postprocessing quad
+		post_processor_render(&effects, auto_cast glfw.GetTime())
 	}
 }
 
@@ -338,12 +359,10 @@ game_do_collisions :: proc(game: ^Game) {
 				// destroy block if not solid
 				if (!box.is_solid) {
 					box.destroyed = true
-					// TODO: implement
-					// game_spawn_powerups(game, &box)
+					game_spawn_powerups(game, &box)
 				} else {
-					// TODO: implement
-					// shake_time = 0.05
-					// game.effects.shake = true
+					shake_time = 0.05
+					effects.shake = true
 				}
 				// collision resolution
 				dir := collision.direction
@@ -383,21 +402,20 @@ game_do_collisions :: proc(game: ^Game) {
 		}
 	}
 
-	// TODO: implement
-	// for (powerup_t &powerup : game->powerups) {
-	//     if (!powerup.game_object.destroyed) {
-	//         if (powerup.game_object.position.y >= game->height) {
-	//             powerup.game_object.destroyed = true;
-	//         }
-	//
-	//         // collided with player, now activate powerup
-	//         if (check_collision_AABB_AABB(game->player, powerup.game_object)) {
-	//             game_activate_powerup(game, &powerup);
-	//             powerup.game_object.destroyed = true;
-	//             powerup.activated = true;
-	//         }
-	//     }
-	// }
+	for &powerup in game.power_ups {
+		if (!powerup.game_object.destroyed) {
+			if (powerup.game_object.position.y >= auto_cast game.height) {
+				powerup.game_object.destroyed = true
+			}
+
+			// collided with player, now activate powerup
+			if (check_collision_AABB_AABB(game.player, powerup.game_object)) {
+				game_activate_powerup(game, &powerup)
+				powerup.game_object.destroyed = true
+				powerup.activated = true
+			}
+		}
+	}
 
 	// check collisions for player pad (unless stuck)
 	result := check_collision_AABB_circle(game.ball, game.player)
@@ -484,4 +502,159 @@ vector_direction :: proc(target: glm.vec2) -> Direction {
 		}
 	}
 	return auto_cast best_match
+}
+
+// Powerups
+is_other_powerup_active :: proc(powerups: ^[dynamic]PowerUp, type: string) -> bool {
+	// Check if another PowerUp of the same type is still active
+	// in which case we don't disable its effect (yet)
+	for &powerup in powerups {
+		if (powerup.activated) {
+			if (powerup.type == type) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+should_spawn :: proc(chance: u32) -> bool {
+	random := rand.uint32() % chance
+	return random == 0
+}
+
+game_spawn_powerups :: proc(game: ^Game, block: ^GameObject) {
+	// 1 in 75 chance
+	if (should_spawn(75)) {
+		powerup := PowerUp{}
+		tex, _ := rm_get_texture(&resources, "powerup_speed")
+		powerup_create(&powerup, "speed", glm.vec3{0.5, 0.5, 1.0}, 0.0, block.position, tex)
+		append(&game.power_ups, powerup)
+	}
+	if (should_spawn(75)) {
+		powerup := PowerUp{}
+		tex, _ := rm_get_texture(&resources, "powerup_sticky")
+		powerup_create(&powerup, "sticky", glm.vec3{1.0, 0.5, 1.0}, 20.0, block.position, tex)
+		append(&game.power_ups, powerup)
+	}
+	if (should_spawn(75)) {
+		powerup := PowerUp{}
+		tex, _ := rm_get_texture(&resources, "powerup_passthrough")
+		powerup_create(
+			&powerup,
+			"pass-through",
+			glm.vec3{0.5, 1.0, 0.5},
+			10.0,
+			block.position,
+			tex,
+		)
+		append(&game.power_ups, powerup)
+	}
+	if (should_spawn(75)) {
+		powerup := PowerUp{}
+		tex, _ := rm_get_texture(&resources, "powerup_increase")
+		powerup_create(
+			&powerup,
+			"pad-size-increase",
+			glm.vec3{1.0, 0.6, 0.4},
+			0.0,
+			block.position,
+			tex,
+		)
+		append(&game.power_ups, powerup)
+	}
+	// negative powerups should spawn more often
+	if (should_spawn(15)) {
+		powerup := PowerUp{}
+		tex, _ := rm_get_texture(&resources, "powerup_confuse")
+		powerup_create(&powerup, "confuse", glm.vec3{1.0, 0.3, 0.3}, 15.0, block.position, tex)
+		append(&game.power_ups, powerup)
+	}
+	if (should_spawn(15)) {
+		powerup := PowerUp{}
+		tex, _ := rm_get_texture(&resources, "powerup_chaos")
+		powerup_create(&powerup, "chaos", glm.vec3{0.9, 0.25, 0.25}, 15.0, block.position, tex)
+		append(&game.power_ups, powerup)
+	}
+}
+
+game_update_powerups :: proc(game: ^Game, dt: f32) {
+	for &powerup in game.power_ups {
+		powerup.game_object.position += powerup.game_object.velocity * dt
+		if (powerup.activated) {
+			powerup.duration -= dt
+
+			if (powerup.duration <= 0.0) {
+				// remove powerup from list (will later be removed)
+				powerup.activated = false
+				// deactivate effects
+				if (powerup.type == "sticky") {
+					// only reset if no other powerup of
+					// type sticky is active
+					if (!is_other_powerup_active(&game.power_ups, "sticky")) {
+						game.ball.sticky = false
+						game.player.color = glm.vec3(1.0)
+					}
+				} else if (powerup.type == "pass-through") {
+					// only reset if no other powerup
+					// of type pass-through is active
+					if (!is_other_powerup_active(&game.power_ups, "pass-through")) {
+						game.ball.pass_through = false
+						game.ball.game_object.color = glm.vec3(1.0)
+					}
+				} else if (powerup.type == "confuse") {
+					// only reset if no other powerup of
+					// type confuse is active
+					if (!is_other_powerup_active(&game.power_ups, "confuse")) {
+						effects.confuse = false
+					}
+				} else if (powerup.type == "chaos") {
+					// only reset if no other powerup of
+					// type chaos is active
+					if (!is_other_powerup_active(&game.power_ups, "chaos")) {
+						effects.chaos = false
+					}
+				}
+			}
+		}
+	}
+
+	// remove all powerups from vector that are destroyed and !activated (thus
+	// either off the map or finished) note we use a lambda expression to remove
+	// each powerup which is destroyed and not activated
+	i := 0
+	for i < len(game.power_ups) {
+		power_up := game.power_ups[i]
+		if (power_up.game_object.destroyed && !power_up.activated) {
+			// Remove this element as it doesn't match the predicate
+			ordered_remove(&game.power_ups, i)
+			// Don't increment i since we need to check the new element at this position
+		} else {
+			// Keep this element and move to the next
+			i += 1
+		}
+	}
+}
+
+game_activate_powerup :: proc(game: ^Game, powerup: ^PowerUp) {
+	if (powerup.type == "speed") {
+		game.ball.game_object.velocity *= 1.2
+	} else if (powerup.type == "sticky") {
+		game.ball.sticky = true
+		game.player.color = glm.vec3{1.0, 0.5, 1.0}
+	} else if (powerup.type == "pass-through") {
+		game.ball.pass_through = true
+		game.ball.game_object.color = glm.vec3{1.0, 0.5, 0.5}
+	} else if (powerup.type == "pad-size-increase") {
+		game.player.size.x += 50
+	} else if (powerup.type == "confuse") {
+		if (!effects.chaos) {
+			// only activate if chaos wasn't already active
+			effects.confuse = true
+		}
+	} else if (powerup.type == "chaos") {
+		if (!effects.confuse) {
+			effects.chaos = true
+		}
+	}
 }

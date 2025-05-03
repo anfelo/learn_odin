@@ -20,7 +20,7 @@ ParticleGenerator :: struct {
 	// render state
 	shader:             ^Shader,
 	texture:            ^Texture2D,
-	vao:                u32,
+	VAO:                u32,
 }
 
 particle_create :: proc(particle: ^Particle) {
@@ -76,7 +76,7 @@ particle_generator_draw :: proc(pg: ^ParticleGenerator) {
 
 			texture_bind(pg.texture, gl.GL_Enum.TEXTURE0)
 
-			gl.BindVertexArray(pg.vao)
+			gl.BindVertexArray(pg.VAO)
 			gl.DrawArrays(gl.TRIANGLES, 0, 6)
 			gl.BindVertexArray(0)
 		}
@@ -115,13 +115,13 @@ particle_generator_init :: proc(pg: ^ParticleGenerator) {
 		0.0,
 	}
 
-	gl.GenVertexArrays(1, &pg.vao)
+	gl.GenVertexArrays(1, &pg.VAO)
 	gl.GenBuffers(1, &VBO)
 
 	gl.BindBuffer(gl.ARRAY_BUFFER, VBO)
 	gl.BufferData(gl.ARRAY_BUFFER, size_of(particle_quad), &particle_quad, gl.STATIC_DRAW)
 
-	gl.BindVertexArray(pg.vao)
+	gl.BindVertexArray(pg.VAO)
 	gl.EnableVertexAttribArray(0)
 	gl.VertexAttribPointer(0, 4, gl.FLOAT, gl.FALSE, 4 * size_of(f32), 0)
 

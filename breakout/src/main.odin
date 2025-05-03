@@ -14,6 +14,7 @@ game := Game {
 	levels = [dynamic]GameLevel{},
 	level  = 0,
 	player = GameObject{},
+    power_ups = [dynamic]PowerUp{}
 }
 
 main :: proc() {

@@ -22,7 +22,7 @@ rm_load_shader :: proc(
 }
 
 // retrieves a stored shader
-rm_get_shader :: proc(rm: ^ResourceManager, name: string) -> ^Shader {
+rm_get_shader :: proc(rm: ^ResourceManager, name: string) -> (^Shader, bool) {
 	return &rm.shaders[name]
 }
 
